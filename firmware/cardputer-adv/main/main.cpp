@@ -1109,8 +1109,8 @@ bool load_store_catalogue() {
     }
     esp_http_client_config_t cfg={};
     const char* catalogue_urls[]={
-        "https://zdmkuookuljcintzgzrh.supabase.co/storage/v1/object/public/mcai-app-store/catalogue.json",
-        "https://raw.githubusercontent.com/betabeeswax/MCAI-OS-APPS/main/catalogue.json"
+        "https://raw.githubusercontent.com/betabeeswax/MCAI-OS-APPS/main/catalogue.json",
+        "https://zdmkuookuljcintzgzrh.supabase.co/storage/v1/object/public/mcai-app-store/catalogue.json"
     };
     cfg.event_handler=catalogue_http_event;cfg.timeout_ms=15000;cfg.buffer_size=2048;cfg.buffer_size_tx=512;
     cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.keep_alive_enable=false;cfg.disable_auto_redirect=true;
