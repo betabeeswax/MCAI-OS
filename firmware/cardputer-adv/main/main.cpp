@@ -1108,11 +1108,15 @@ bool load_store_catalogue() {
         std::snprintf(store_message,sizeof(store_message),"TIME NOT SYNCED");return load_store_catalogue_cache();
     }
     esp_http_client_config_t cfg={};
-    cfg.url="https://zdmkuookuljcintzgzrh.supabase.co/storage/v1/object/public/mcai-app-store/catalogue.json";
+    const char* catalogue_urls[]={
+        "https://zdmkuookuljcintzgzrh.supabase.co/storage/v1/object/public/mcai-app-store/catalogue.json",
+        "https://raw.githubusercontent.com/betabeeswax/MCAI-OS-APPS/main/catalogue.json"
+    };
     cfg.event_handler=catalogue_http_event;cfg.timeout_ms=15000;cfg.buffer_size=2048;cfg.buffer_size_tx=512;
     cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.keep_alive_enable=false;cfg.disable_auto_redirect=true;
     esp_err_t result=ESP_FAIL;int status=0;
     for(int attempt=0;attempt<2;attempt++){
+        cfg.url=catalogue_urls[attempt];
         catalogue_length=0;catalogue_buffer[0]=0;
         esp_http_client_handle_t client=esp_http_client_init(&cfg);
         if(client){
@@ -1121,7 +1125,7 @@ bool load_store_catalogue() {
             esp_http_client_cleanup(client);
         }
         if(result==ESP_OK&&status==200&&catalogue_length>0)break;
-        ESP_LOGW(kTag,"Supabase Store refresh %d failed: %s HTTP %d",attempt+1,esp_err_to_name(result),status);
+        ESP_LOGW(kTag,"Store source %d failed: %s HTTP %d",attempt+1,esp_err_to_name(result),status);
         if(attempt==0){configure_wifi_fallback_dns();vTaskDelay(pdMS_TO_TICKS(800));}
     }
     if(result!=ESP_OK||status!=200||catalogue_length==0){
