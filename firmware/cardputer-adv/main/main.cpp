@@ -1139,7 +1139,7 @@ void open_store() {
     if(store_loading)return;
     store_loading=true;store_count=0;store_selected=0;store_scroll=0;catalogue_loaded=false;
     std::snprintf(store_message,sizeof(store_message),"LOADING SD CACHE");ui_dirty=true;
-    if(xTaskCreate(store_cache_task,"store-cache",8192,nullptr,2,nullptr)!=pdPASS){
+    if(xTaskCreate(store_cache_task,"store-cache",16384,nullptr,2,nullptr)!=pdPASS){
         store_loading=false;std::snprintf(store_message,sizeof(store_message),"STORE TASK FAILED");ui_dirty=true;
     }
 }
