@@ -1030,69 +1030,14 @@ bool load_store_from_local_apps() {
     return catalogue_loaded;
 }
 
-bool load_store_catalogue() {
-    store_count=0;store_selected=0;store_scroll=0;catalogue_loaded=false;catalogue_length=0;catalogue_buffer[0]=0;
-    for(int wait=0;wifi_connecting&&wait<120;wait++)vTaskDelay(pdMS_TO_TICKS(250));
-    if(wifi_connecting){if(load_store_from_local_apps()){std::snprintf(store_message,sizeof(store_message),"LOCAL APPS: %d",store_count);return true;}std::snprintf(store_message,sizeof(store_message),"WIFI STILL CONNECTING");return false;}
-    if(!connect_wifi_from_sd()){if(load_store_from_local_apps()){std::snprintf(store_message,sizeof(store_message),"LOCAL APPS: %d",store_count);return true;}return false;}
-    // HTTPS certificate validation needs a real clock. Wi-Fi can have an IP
-    // while NTP is still syncing, so wait before contacting GitHub.
-    start_time_sync();
-    for(int wait=0;wait<60&&std::time(nullptr)<1577836800;wait++)
-        vTaskDelay(pdMS_TO_TICKS(500));
-    if(std::time(nullptr)<1577836800){
-        if(load_store_from_local_apps()){std::snprintf(store_message,sizeof(store_message),"LOCAL APPS: %d",store_count);return true;}
-        std::snprintf(store_message,sizeof(store_message),"TIME NOT SYNCED - RETRY");return false;
+bool parse_store_catalogue(bool loaded_from_cache) {
+    if(catalogue_length==0||catalogue_length>=sizeof(catalogue_buffer)-1){
+        std::snprintf(store_message,sizeof(store_message),"CATALOGUE SIZE INVALID");return false;
     }
-    esp_http_client_config_t cfg={};
-    const char* catalogue_urls[]={
-        "https://cdn.jsdelivr.net/gh/betabeeswax/MCAI-OS-APPS@main/catalogue.json",
-        "https://raw.githubusercontent.com/betabeeswax/MCAI-OS-APPS/main/catalogue.json",
-        "https://github.com/betabeeswax/MCAI-OS-APPS/raw/refs/heads/main/catalogue.json"
-    };
-    cfg.event_handler=catalogue_http_event;cfg.timeout_ms=45000;cfg.buffer_size=2048;cfg.buffer_size_tx=1024;
-    cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.keep_alive_enable=false;cfg.disable_auto_redirect=false;cfg.max_redirection_count=8;
-    esp_err_t result=ESP_FAIL;int status=0;
-    for(int attempt=0;attempt<3;attempt++){
-        cfg.url=catalogue_urls[attempt];
-        catalogue_length=0;catalogue_buffer[0]=0;
-        esp_http_client_handle_t client=esp_http_client_init(&cfg);
-        if(!client){result=ESP_FAIL;status=0;}
-        else {
-            result=esp_http_client_perform(client);
-            status=esp_http_client_get_status_code(client);
-            esp_http_client_cleanup(client);
-        }
-        if(result==ESP_OK&&status==200&&catalogue_length>0)break;
-        ESP_LOGW(kTag,"Store HTTPS source %d failed: %s HTTP %d",attempt+1,esp_err_to_name(result),status);
-        configure_wifi_fallback_dns();
-        if(attempt<2)vTaskDelay(pdMS_TO_TICKS(1200));
-    }
-    bool loaded_from_cache=false;
-    if(result!=ESP_OK||status!=200||catalogue_length==0){
-        // Keep the last known catalogue on the SD card so the Store can still
-        // open and show installed/available entries when the network is down.
-        if(sd_ready){
-            FILE* cache=std::fopen("/sdcard/MCAI-OS/store-catalogue.json","r");
-            if(cache){
-                catalogue_length=std::fread(catalogue_buffer,1,sizeof(catalogue_buffer)-1,cache);
-                std::fclose(cache);
-                catalogue_buffer[catalogue_length]=0;
-                loaded_from_cache=catalogue_length>0;
-            }
-        }
-        if(!loaded_from_cache){
-            if(load_store_from_local_apps()){std::snprintf(store_message,sizeof(store_message),"LOCAL APPS: %d",store_count);return true;}
-            if(result!=ESP_OK)std::snprintf(store_message,sizeof(store_message),"HTTPS FAIL: %.20s",esp_err_to_name(result));
-            else if(status!=200)std::snprintf(store_message,sizeof(store_message),"GITHUB HTTP %d",status);
-            else std::snprintf(store_message,sizeof(store_message),"EMPTY CATALOGUE RESPONSE");
-            return false;
-        }
-    }
-    if(catalogue_length>=sizeof(catalogue_buffer)-1){std::snprintf(store_message,sizeof(store_message),"CATALOGUE TOO LARGE");return false;}
     cJSON* root=cJSON_Parse(catalogue_buffer);
     cJSON* apps=root?cJSON_GetObjectItemCaseSensitive(root,"apps"):nullptr;
     if(!cJSON_IsArray(apps)){if(root)cJSON_Delete(root);std::snprintf(store_message,sizeof(store_message),"INVALID CATALOGUE JSON");return false;}
+    store_count=0;store_selected=0;store_scroll=0;
     cJSON* app=nullptr;
     cJSON_ArrayForEach(app,apps){
         if(store_count>=128)break;
@@ -1132,9 +1077,71 @@ bool load_store_catalogue() {
             else unlink("/sdcard/MCAI-OS/store-catalogue.json.tmp");
         }
     }
-    if(loaded_from_cache)std::snprintf(store_message,sizeof(store_message),"SD CACHE: %d APPS",store_count);
-    else std::snprintf(store_message,sizeof(store_message),"%d APPS LOADED",store_count);
+    std::snprintf(store_message,sizeof(store_message),loaded_from_cache?"SD CACHE: %d APPS":"%d APPS LOADED",store_count);
     return true;
+}
+bool load_store_catalogue_cache() {
+    store_count=0;store_selected=0;store_scroll=0;catalogue_loaded=false;catalogue_length=0;catalogue_buffer[0]=0;
+    if(sd_ready){
+        FILE* cache=std::fopen("/sdcard/MCAI-OS/store-catalogue.json","r");
+        if(cache){
+            catalogue_length=std::fread(catalogue_buffer,1,sizeof(catalogue_buffer)-1,cache);
+            std::fclose(cache);catalogue_buffer[catalogue_length]=0;
+            if(catalogue_length>0&&parse_store_catalogue(true))return true;
+        }
+    }
+    if(load_store_from_local_apps()){
+        std::snprintf(store_message,sizeof(store_message),"LOCAL APPS: %d",store_count);return true;
+    }
+    std::snprintf(store_message,sizeof(store_message),"PRESS R TO LOAD STORE");
+    return false;
+}
+bool load_store_catalogue() {
+    store_count=0;store_selected=0;store_scroll=0;catalogue_loaded=false;catalogue_length=0;catalogue_buffer[0]=0;
+    for(int wait=0;wifi_connecting&&wait<60;wait++)vTaskDelay(pdMS_TO_TICKS(250));
+    if(wifi_connecting){std::snprintf(store_message,sizeof(store_message),"WIFI STILL CONNECTING");return load_store_catalogue_cache();}
+    if(!connect_wifi_from_sd()){std::snprintf(store_message,sizeof(store_message),"WIFI NOT CONNECTED");return load_store_catalogue_cache();}
+    start_time_sync();
+    for(int wait=0;wait<30&&std::time(nullptr)<1577836800;wait++)
+        vTaskDelay(pdMS_TO_TICKS(500));
+    if(std::time(nullptr)<1577836800){
+        std::snprintf(store_message,sizeof(store_message),"TIME NOT SYNCED");return load_store_catalogue_cache();
+    }
+    esp_http_client_config_t cfg={};
+    cfg.url="https://zdmkuookuljcintzgzrh.supabase.co/storage/v1/object/public/mcai-app-store/catalogue.json";
+    cfg.event_handler=catalogue_http_event;cfg.timeout_ms=15000;cfg.buffer_size=2048;cfg.buffer_size_tx=512;
+    cfg.crt_bundle_attach=esp_crt_bundle_attach;cfg.keep_alive_enable=false;cfg.disable_auto_redirect=true;
+    esp_err_t result=ESP_FAIL;int status=0;
+    for(int attempt=0;attempt<2;attempt++){
+        catalogue_length=0;catalogue_buffer[0]=0;
+        esp_http_client_handle_t client=esp_http_client_init(&cfg);
+        if(client){
+            result=esp_http_client_perform(client);
+            status=esp_http_client_get_status_code(client);
+            esp_http_client_cleanup(client);
+        }
+        if(result==ESP_OK&&status==200&&catalogue_length>0)break;
+        ESP_LOGW(kTag,"Supabase Store refresh %d failed: %s HTTP %d",attempt+1,esp_err_to_name(result),status);
+        if(attempt==0){configure_wifi_fallback_dns();vTaskDelay(pdMS_TO_TICKS(800));}
+    }
+    if(result!=ESP_OK||status!=200||catalogue_length==0){
+        if(result!=ESP_OK)std::snprintf(store_message,sizeof(store_message),"SUPABASE: %.18s",esp_err_to_name(result));
+        else std::snprintf(store_message,sizeof(store_message),"SUPABASE HTTP %d",status);
+        return load_store_catalogue_cache();
+    }
+    if(!parse_store_catalogue(false))return load_store_catalogue_cache();
+    return true;
+}
+void store_cache_task(void*) {
+    load_store_catalogue_cache();store_loading=false;ui_dirty=true;vTaskDelete(nullptr);
+}
+void open_store() {
+    if(store_loading)return;
+    store_loading=true;store_count=0;store_selected=0;store_scroll=0;catalogue_loaded=false;
+    std::snprintf(store_message,sizeof(store_message),"LOADING SD CACHE");ui_dirty=true;
+    if(xTaskCreate(store_cache_task,"store-cache",8192,nullptr,2,nullptr)!=pdPASS){
+        store_loading=false;std::snprintf(store_message,sizeof(store_message),"STORE TASK FAILED");ui_dirty=true;
+    }
 }
 void refresh_store_task(void*) {
     load_store_catalogue();store_loading=false;ui_dirty=true;vTaskDelete(nullptr);
@@ -1302,7 +1309,7 @@ void start_launcher_item(int item) {
     active_app=item;
     if(item==0){std::snprintf(current_dir,sizeof(current_dir),"/sdcard");refresh_files();}
     if(item==1){note_editing=false;refresh_notes();}
-    if(item==5){refresh_store();}
+    if(item==5){open_store();}
     if(item==6)last_clock_render_second=-1;
     if(item==15){wifi_test_done=false;}
     if(item==16)refresh_music_files();
@@ -1722,12 +1729,12 @@ void render_app() {
         std::snprintf(line,sizeof(line),"HEAP %lu KB",(unsigned long)(esp_get_free_heap_size()/1024));draw_text(line,8,66,1,ink);
         draw_text("M5STACK CARDPUTER ADV",8,84,1,accent);break;
     case 5:
-        draw_text("GITHUB APP STORE",8,25,1,accent);
-        draw_text(catalogue_loaded?"MCAI-OS-APPS / MAIN":"GITHUB CATALOGUE",8,39,1,ink);
-        if(store_loading){draw_text("CONNECTING / DOWNLOADING...",8,70,1,accent);}
+        draw_text("MCAI-OS APP STORE",8,25,1,accent);
+        draw_text(catalogue_loaded?"SUPABASE / SD CACHE":"SUPABASE CATALOGUE",8,39,1,ink);
+        if(store_loading){draw_text("LOADING CATALOGUE...",8,70,1,accent);}
         else if(!catalogue_loaded&&store_count==0){draw_text("CATALOGUE NOT LOADED",8,65,1,accent);draw_text("SEE ERROR BELOW",8,80,1,ink);}
         for(int i=0;i<4;i++){int ix=store_scroll+i;if(ix>=store_count)break;char row[40];std::snprintf(row,sizeof(row),"%c %.20s %s",ix==store_selected?'>':' ',store_names[ix],store_builtin_index(store_ids[ix])>=0?"BUILT-IN":(package_installed(store_ids[ix])?"INSTALLED":(std::strcmp(store_status[ix],"available")==0?"AVAILABLE":(std::strcmp(store_status[ix],"experimental")==0?"EXPERIMENTAL":"PLANNED"))));draw_text(row,8,54+i*13,1,ix==store_selected?accent:ink);}
-        draw_text(store_message,8,110,1,muted);draw_text("UP/DOWN ENTER R RETRY BKSP BACK",8,122,1,muted);break;
+        draw_text(store_message,8,110,1,muted);draw_text("UP/DOWN ENTER R REFRESH BKSP BACK",8,122,1,muted);break;
     case 6: {
         std::time_t now=std::time(nullptr);std::tm tmv{};localtime_r(&now,&tmv);
         if(tmv.tm_year<120){draw_text("TIME NOT SYNCED",8,33,2,accent);draw_text("SET WIFI IN SETTINGS",8,67,1,ink);}
